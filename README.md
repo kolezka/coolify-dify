@@ -4,7 +4,7 @@ Deploy [Dify](https://github.com/langgenius/dify) — the open-source LLM app de
 
 This repo is a **curated, Coolify-tuned** version of Dify's official Docker Compose stack. Point Coolify at it, assign a domain, click deploy. Coolify generates all secrets and handles TLS; there is nothing to configure by hand to get a working instance.
 
-- **Dify version:** `1.15.0` (pinned)
+- **Dify version:** `1.19.0` (pinned)
 - **Vector store:** Weaviate
 - **Everything runs in one stack** on a single domain.
 
@@ -27,6 +27,9 @@ A single `docker-compose.yaml` running the core Dify stack:
 | `plugin_daemon` | `langgenius/dify-plugin-daemon` | Installs & runs plugins |
 | `sandbox` | `langgenius/dify-sandbox` | Isolated code execution |
 | `ssrf_proxy` | `ubuntu/squid` | SSRF-protected outbound proxy |
+| `agent_backend` | `langgenius/dify-agent-backend` | Agent v2 runtime |
+| `local_sandbox` | `langgenius/dify-agent-local-sandbox` | Shell workspaces for agents |
+| `agent_ssrf_proxy` | `ubuntu/squid` | Outbound proxy for `local_sandbox` only |
 | `db_postgres` | `postgres:15-alpine` | Metadata database |
 | `redis` | `redis:6-alpine` | Cache + Celery broker |
 | `weaviate` | `semitechnologies/weaviate` | Vector store |
@@ -77,6 +80,11 @@ This template relies on [Coolify magic variables](https://coolify.io/docs/knowle
 | `SERVICE_PASSWORD_64_SECRETKEY` | Dify `SECRET_KEY` (session signing) |
 | `SERVICE_PASSWORD_64_PLUGINDAEMON` | Plugin daemon server key |
 | `SERVICE_PASSWORD_64_INNERAPI` | Inner API key between Dify and the plugin daemon |
+| `SERVICE_PASSWORD_64_AGENTAPI` | Token between the API and the agent backend |
+| `SERVICE_PASSWORD_64_SHELLCTL` | Token between the agent backend and `local_sandbox` |
+| `SERVICE_PASSWORD_64_AGENTSECRET` | Seed for `DIFY_AGENT_SERVER_SECRET_KEY` |
+
+`DIFY_AGENT_SERVER_SECRET_KEY` must be unpadded base64url of exactly 32 bytes, which no magic variable produces. `agent_backend` derives it at startup as the SHA-256 of the seed. Set `DIFY_AGENT_SERVER_SECRET_KEY` yourself to override (generate with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`).
 
 Coolify generates each value once and reuses it across services and redeploys. Every other setting has a sensible default in `docker-compose.yaml` and can be overridden from the app's **Environment Variables** tab in Coolify.
 
@@ -92,11 +100,17 @@ Image tags are pinned in `docker-compose.yaml`. To upgrade:
 
 Database migrations run automatically on `api` startup (`MIGRATION_ENABLED=true`). Your data persists in the named volumes across redeploys. Take a backup / snapshot before major version jumps.
 
+### From 1.15.0 to 1.19.0
+
+- Weaviate goes from `1.27.0` to `1.39.13`. Back up `dify_weaviate_data` first and check Weaviate's migration notes for the versions in between; an existing install with data may need intermediate tags. A fresh install is not affected.
+- New services `agent_backend`, `local_sandbox` and `agent_ssrf_proxy` and three new secrets. Coolify generates the secrets on the next deploy.
+- Upstream nginx now sends `X-Forwarded-For: $remote_addr`. Behind Coolify that is the proxy's address, so Dify logs and rate limits see Traefik, not the client.
+
 ---
 
 ## Persistence & backups
 
-Data is stored in named volumes: `dify_app_storage` (uploaded files), `dify_db_data` (Postgres), `dify_redis_data`, `dify_weaviate_data` (vectors), `dify_plugin_daemon`, and `dify_sandbox_dependencies`. Use Coolify's scheduled backups for `db_postgres`, and back up the storage and weaviate volumes for a complete restore.
+Data is stored in named volumes: `dify_app_storage` (uploaded files), `dify_db_data` (Postgres), `dify_redis_data`, `dify_weaviate_data` (vectors), `dify_plugin_daemon`, `dify_sandbox_dependencies`, and the agent workspaces `dify_agent_local_sandbox_home` and `dify_agent_local_sandbox_workspace`. Use Coolify's scheduled backups for `db_postgres`, and back up the storage and weaviate volumes for a complete restore.
 
 ---
 
