@@ -34,7 +34,18 @@ A single `docker-compose.yaml` running the core Dify stack:
 | `redis` | `redis:6-alpine` | Cache + Celery broker |
 | `weaviate` | `semitechnologies/weaviate` | Vector store |
 
-All persistent data lives in named Docker volumes managed by Coolify. Config files (nginx templates, squid config, sandbox config) are bind-mounted from this repo.
+All persistent data lives in named Docker volumes managed by Coolify. Config files (nginx templates, squid config, sandbox config, the postgres init script) are embedded in `docker-compose.yaml` as inline `configs:`.
+
+### Editing a config file
+
+Coolify does not copy repository files for a Git-based Compose deploy: a bind mount such as `./nginx/nginx.conf.template` arrives as an empty directory. So the files under `nginx/`, `ssrf_proxy/`, `volumes/sandbox/` and `postgres/` are the source, and `docker-compose.yaml` carries a generated copy. After editing one of them, run:
+
+```bash
+python3 scripts/embed-configs.py          # rewrite the embedded block
+python3 scripts/embed-configs.py --check  # exit 1 if the block is stale
+```
+
+The script writes every `$` as `$$`, so Compose leaves the `${...}` placeholders alone for `envsubst` inside the containers.
 
 ---
 
