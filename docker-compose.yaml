@@ -251,6 +251,8 @@ services:
     image: langgenius/dify-web:1.19.0
     restart: always
     environment:
+      # Docker's hostname can resolve to only one interface on Coolify's networks.
+      HOSTNAME: "0.0.0.0"
       CONSOLE_API_URL: ${CONSOLE_API_URL:-}
       APP_API_URL: ${APP_API_URL:-}
       SERVER_CONSOLE_API_URL: ${SERVER_CONSOLE_API_URL:-http://api:5001}
