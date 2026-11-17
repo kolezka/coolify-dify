@@ -116,6 +116,7 @@ Database migrations run automatically on `api` startup (`MIGRATION_ENABLED=true`
 - Weaviate goes from `1.27.0` to `1.39.13`. Back up `dify_weaviate_data` first and check Weaviate's migration notes for the versions in between; an existing install with data may need intermediate tags. A fresh install is not affected.
 - New services `agent_backend`, `local_sandbox` and `agent_ssrf_proxy` and three new secrets. Coolify generates the secrets on the next deploy.
 - Upstream nginx now sends `X-Forwarded-For: $remote_addr`. Behind Coolify that is the proxy's address, so Dify logs and rate limits see Traefik, not the client.
+- The plugin daemon (0.6.x) runs as uid 1001. `init_permissions` now also hands `dify_plugin_daemon` to that user, so installing plugins no longer fails with `mkdir /app/storage/assets: permission denied`. Each volume has its own flag file, so existing installs get the fix on the next deploy.
 
 ---
 
