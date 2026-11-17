@@ -1,7 +1,7 @@
 # =============================================================================
 # Dify — ready-to-deploy on Coolify
 # =============================================================================
-# Pinned to Dify v1.15.0. This is a curated, opinionated subset of Dify's
+# Pinned to Dify v1.19.0. This is a curated, opinionated subset of Dify's
 # official docker/docker-compose.yaml, adapted for Coolify:
 #
 #   * Public entrypoint is the `nginx` service. It declares
@@ -92,6 +92,7 @@ x-shared-env: &shared-env
   VECTOR_STORE: ${VECTOR_STORE:-weaviate}
   VECTOR_INDEX_NAME_PREFIX: ${VECTOR_INDEX_NAME_PREFIX:-Vector_index}
   WEAVIATE_ENDPOINT: ${WEAVIATE_ENDPOINT:-http://weaviate:8080}
+  WEAVIATE_GRPC_ENDPOINT: ${WEAVIATE_GRPC_ENDPOINT:-grpc://weaviate:50051}
   WEAVIATE_API_KEY: ${SERVICE_PASSWORD_WEAVIATE}
   # --- Code execution sandbox ------------------------------------------------
   CODE_EXECUTION_ENDPOINT: ${CODE_EXECUTION_ENDPOINT:-http://sandbox:8194}
@@ -111,6 +112,15 @@ x-shared-env: &shared-env
   PLUGIN_REMOTE_INSTALL_PORT: ${PLUGIN_REMOTE_INSTALL_PORT:-5003}
   MARKETPLACE_ENABLED: ${MARKETPLACE_ENABLED:-true}
   MARKETPLACE_API_URL: ${MARKETPLACE_API_URL:-https://marketplace.dify.ai}
+  # --- Agent backend (Agent v2, new in 1.19) ---------------------------------
+  AGENT_BACKEND_BASE_URL: ${AGENT_BACKEND_BASE_URL:-http://agent_backend:5050}
+  AGENT_BACKEND_API_TOKEN: ${SERVICE_PASSWORD_64_AGENTAPI}
+  DIFY_AGENT_API_TOKEN: ${SERVICE_PASSWORD_64_AGENTAPI}
+  NEXT_PUBLIC_ENABLE_AGENT_V2: ${NEXT_PUBLIC_ENABLE_AGENT_V2:-true}
+  # --- Proxy headers ---------------------------------------------------------
+  # nginx is the only way in, so the API trusts its X-Forwarded-* headers.
+  RESPECT_XFORWARD_HEADERS_ENABLED: ${RESPECT_XFORWARD_HEADERS_ENABLED:-true}
+  REDIS_KEEPALIVE: ${REDIS_KEEPALIVE:-true}
 
 services:
   # ---------------------------------------------------------------------------
@@ -138,7 +148,7 @@ services:
   # Dify API (console + service API).
   # ---------------------------------------------------------------------------
   api:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.19.0
     restart: always
     environment:
       <<: *shared-env
@@ -150,6 +160,8 @@ services:
       db_postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      agent_backend:
         condition: service_started
     volumes:
       - dify_app_storage:/app/api/storage
@@ -167,7 +179,7 @@ services:
   # WebSocket service for real-time workflow collaboration (socket.io).
   # ---------------------------------------------------------------------------
   api_websocket:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.19.0
     restart: always
     environment:
       <<: *shared-env
@@ -177,10 +189,14 @@ services:
       SERVER_WORKER_CONNECTIONS: ${API_WEBSOCKET_WORKER_CONNECTIONS:-1000}
       GUNICORN_TIMEOUT: ${API_WEBSOCKET_GUNICORN_TIMEOUT:-360}
     depends_on:
+      init_permissions:
+        condition: service_completed_successfully
       db_postgres:
         condition: service_healthy
       redis:
         condition: service_started
+    volumes:
+      - dify_app_storage:/app/api/storage
     networks:
       - ssrf_proxy_network
       - default
@@ -189,7 +205,7 @@ services:
   # Celery worker: dataset indexing, workflows, mail, and other async tasks.
   # ---------------------------------------------------------------------------
   worker:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.19.0
     restart: always
     environment:
       <<: *shared-env
@@ -212,7 +228,7 @@ services:
   # Celery beat: schedules periodic tasks.
   # ---------------------------------------------------------------------------
   worker_beat:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.19.0
     restart: always
     environment:
       <<: *shared-env
@@ -230,7 +246,7 @@ services:
   # Dify web frontend (Next.js).
   # ---------------------------------------------------------------------------
   web:
-    image: langgenius/dify-web:1.15.0
+    image: langgenius/dify-web:1.19.0
     restart: always
     environment:
       CONSOLE_API_URL: ${CONSOLE_API_URL:-}
@@ -255,6 +271,7 @@ services:
       ENABLE_WEBSITE_JINAREADER: ${ENABLE_WEBSITE_JINAREADER:-true}
       ENABLE_WEBSITE_FIRECRAWL: ${ENABLE_WEBSITE_FIRECRAWL:-true}
       ENABLE_WEBSITE_WATERCRAWL: ${ENABLE_WEBSITE_WATERCRAWL:-true}
+      NEXT_PUBLIC_ENABLE_AGENT_V2: ${NEXT_PUBLIC_ENABLE_AGENT_V2:-true}
     depends_on:
       - api
 
@@ -272,7 +289,7 @@ services:
       PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
       DB_PLUGIN_DATABASE: ${DB_PLUGIN_DATABASE:-dify_plugin}
     command: >
-      postgres -c 'max_connections=${POSTGRES_MAX_CONNECTIONS:-100}'
+      postgres -c 'max_connections=${POSTGRES_MAX_CONNECTIONS:-200}'
                -c 'shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}'
                -c 'work_mem=${POSTGRES_WORK_MEM:-4MB}'
                -c 'maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}'
@@ -329,7 +346,7 @@ services:
   # Plugin daemon: installs and runs Dify plugins. Uses the `dify_plugin` DB.
   # ---------------------------------------------------------------------------
   plugin_daemon:
-    image: langgenius/dify-plugin-daemon:0.6.3-local
+    image: langgenius/dify-plugin-daemon:0.6.14-local
     restart: always
     environment:
       DB_TYPE: ${DB_TYPE:-postgresql}
@@ -380,6 +397,7 @@ services:
     restart: always
     volumes:
       - ./ssrf_proxy/squid.conf.template:/etc/squid/squid.conf.template:ro
+      - ./ssrf_proxy/squid-common.conf.template:/etc/squid/dify_common.conf.template:ro
       - ./ssrf_proxy/docker-entrypoint.sh:/docker-entrypoint-mount.sh:ro
     entrypoint: ["sh", "-c", "cp /docker-entrypoint-mount.sh /docker-entrypoint.sh && sed -i 's/\r$$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh && /docker-entrypoint.sh"]
     environment:
@@ -390,6 +408,94 @@ services:
     networks:
       - ssrf_proxy_network
       - default
+
+  # ---------------------------------------------------------------------------
+  # Agent backend (Agent v2). Runs agent shells in local_sandbox.
+  # ---------------------------------------------------------------------------
+  agent_backend:
+    image: langgenius/dify-agent-backend:1.19.0
+    restart: always
+    # The stub token key must be unpadded base64url of exactly 32 bytes, which
+    # no Coolify magic variable produces, so derive it from a generated secret.
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$${DIFY_AGENT_SERVER_SECRET_KEY:-}" ]; then
+          DIFY_AGENT_SERVER_SECRET_KEY=$$(python -c 'import base64,hashlib,os; print(base64.urlsafe_b64encode(hashlib.sha256(os.environ["AGENT_SECRET_SEED"].encode()).digest()).rstrip(b"=").decode())')
+          export DIFY_AGENT_SERVER_SECRET_KEY
+        fi
+        exec uvicorn dify_agent.server.app:app --host 0.0.0.0 --port 5050
+    environment:
+      AGENT_SECRET_SEED: ${SERVICE_PASSWORD_64_AGENTSECRET}
+      DIFY_AGENT_API_TOKEN: ${SERVICE_PASSWORD_64_AGENTAPI}
+      DIFY_AGENT_REDIS_URL: redis://:${SERVICE_PASSWORD_REDIS}@redis:6379/2
+      DIFY_AGENT_PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://plugin_daemon:5002}
+      DIFY_AGENT_PLUGIN_DAEMON_API_KEY: ${SERVICE_PASSWORD_64_PLUGINDAEMON}
+      DIFY_AGENT_INNER_API_URL: ${PLUGIN_DIFY_INNER_API_URL:-http://api:5001}
+      DIFY_AGENT_INNER_API_KEY: ${SERVICE_PASSWORD_64_INNERAPI}
+      DIFY_AGENT_RUNTIME_BACKEND: ${DIFY_AGENT_RUNTIME_BACKEND:-local}
+      DIFY_AGENT_LOCAL_SANDBOX_ENDPOINT: ${DIFY_AGENT_LOCAL_SANDBOX_ENDPOINT:-http://local_sandbox:5004}
+      DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN: ${SERVICE_PASSWORD_64_SHELLCTL}
+      DIFY_AGENT_E2B_API_KEY: ${DIFY_AGENT_E2B_API_KEY:-}
+      DIFY_AGENT_E2B_TEMPLATE: ${DIFY_AGENT_E2B_TEMPLATE:-difys-default-team/dify-agent-local-sandbox}
+      DIFY_AGENT_SANDBOX_FILES_BASE_URL: ${DIFY_AGENT_SANDBOX_FILES_BASE_URL:-http://api:5001}
+      DIFY_AGENT_STUB_API_BASE_URL: ${DIFY_AGENT_STUB_API_BASE_URL:-http://agent_backend:5050/agent-stub}
+    depends_on:
+      redis:
+        condition: service_started
+      plugin_daemon:
+        condition: service_started
+    networks:
+      - default
+      - agent_sandbox_network
+
+  # ---------------------------------------------------------------------------
+  # Local sandbox for agent shell workspaces. No route to `api`; its only
+  # egress is agent_ssrf_proxy.
+  # ---------------------------------------------------------------------------
+  local_sandbox:
+    image: langgenius/dify-agent-local-sandbox:1.19.0
+    restart: always
+    command: ["shellctl", "serve", "--listen", "0.0.0.0:5004", "--require-auth-token"]
+    environment:
+      SHELLCTL_AUTH_TOKEN: ${SERVICE_PASSWORD_64_SHELLCTL}
+      HTTP_PROXY: http://agent_ssrf_proxy:3128
+      HTTPS_PROXY: http://agent_ssrf_proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+    volumes:
+      - dify_agent_local_sandbox_home:/home/dify
+      - dify_agent_local_sandbox_workspace:/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5004/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - agent_sandbox_network
+      - local_sandbox_proxy_network
+
+  # ---------------------------------------------------------------------------
+  # SSRF proxy for local_sandbox: allows the internet, agent_backend
+  # /agent-stub/ and api /files/, and denies every other private address.
+  # ---------------------------------------------------------------------------
+  agent_ssrf_proxy:
+    image: ubuntu/squid:latest
+    restart: always
+    volumes:
+      - ./ssrf_proxy/squid-agent.conf.template:/etc/squid/squid.conf.template:ro
+      - ./ssrf_proxy/squid-common.conf.template:/etc/squid/dify_common.conf.template:ro
+      - ./ssrf_proxy/docker-agent-entrypoint.sh:/docker-entrypoint-mount.sh:ro
+    entrypoint: ["sh", "-c", "cp /docker-entrypoint-mount.sh /docker-entrypoint.sh && sed -i 's/\r$$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh && /docker-entrypoint.sh"]
+    environment:
+      HTTP_PORT: ${SSRF_HTTP_PORT:-3128}
+      COREDUMP_DIR: ${SSRF_COREDUMP_DIR:-/var/spool/squid}
+      SSRF_PROXY_ALLOW_PRIVATE_IPS: ${SSRF_PROXY_ALLOW_PRIVATE_IPS:-}
+      SSRF_PROXY_ALLOW_PRIVATE_DOMAINS: ${SSRF_PROXY_ALLOW_PRIVATE_DOMAINS:-}
+    networks:
+      - default
+      - local_sandbox_proxy_network
 
   # ---------------------------------------------------------------------------
   # nginx: single ingress. Coolify assigns a domain to it (SERVICE_FQDN_NGINX_80)
@@ -436,7 +542,7 @@ services:
   # Weaviate vector store.
   # ---------------------------------------------------------------------------
   weaviate:
-    image: semitechnologies/weaviate:1.27.0
+    image: cr.weaviate.io/semitechnologies/weaviate:1.39.13
     restart: always
     volumes:
       - dify_weaviate_data:/var/lib/weaviate
@@ -457,6 +563,14 @@ networks:
   ssrf_proxy_network:
     driver: bridge
     internal: true
+  # agent_backend <-> local_sandbox only.
+  agent_sandbox_network:
+    driver: bridge
+    internal: true
+  # local_sandbox <-> agent_ssrf_proxy only.
+  local_sandbox_proxy_network:
+    driver: bridge
+    internal: true
   default:
     driver: bridge
 
@@ -467,3 +581,5 @@ volumes:
   dify_weaviate_data:
   dify_plugin_daemon:
   dify_sandbox_dependencies:
+  dify_agent_local_sandbox_home:
+  dify_agent_local_sandbox_workspace:
