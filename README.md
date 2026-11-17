@@ -127,6 +127,14 @@ Data is stored in named volumes: `dify_app_storage` (uploaded files), `dify_db_d
 
 ## Local testing (without Coolify)
 
+Run the Compose regression checks without starting containers:
+
+```bash
+python3 -I -m unittest discover -s tests -v
+```
+
+The frontend sets `HOSTNAME=0.0.0.0` so Next.js accepts traffic on every Docker network interface. Keep this override when deploying behind Coolify's proxy.
+
 ```bash
 cp .env.example .env
 # edit .env: set your own random secrets in the "Secrets" block
